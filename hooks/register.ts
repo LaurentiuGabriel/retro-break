@@ -1,26 +1,9 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-type $ = EngineInterface
-
-// Portable Windows builds, pinned so every install gets the same thing.
-// Each is downloaded the first time a game for that system is picked.
-const EMULATORS = {
-  gba: {
-    name: 'mGBA',
-    exe: 'mGBA.exe',
-    url: 'https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64.7z',
-    // An empty portable.ini makes mGBA keep its settings and saves beside itself.
-    portableFile: 'portable.ini',
-  },
-  snes: {
-    name: 'Snes9x',
-    exe: 'snes9x-x64.exe',
-    url: 'https://github.com/snes9xgit/snes9x/releases/download/1.63/snes9x-1.63-win32-x64.zip',
-    portableFile: undefined,
-  },
-} as const
-
-type System = keyof typeof EMULATORS
+type Engine = EngineInterface
+type System = 'snes' | 'gba'
+type Rom = { path: string; system: System }
+type Config = { folders: string[]; delayMs: number }
 
 const SYSTEM_BY_EXT: Record<string, System> = {
   sfc: 'snes',
@@ -30,145 +13,65 @@ const SYSTEM_BY_EXT: Record<string, System> = {
   gbc: 'gba',
 }
 
+/** How deep under the ROM folder to look (a folder per game is common). */
 const MAX_DEPTH = 4
 
 /** How much of the screen's height the game window takes. */
-const WINDOW_SCREEN_SHARE = 0.6
+const SCREEN_SHARE = '0.6'
 
-/**
- * PowerShell that waits for `$p`'s main window, lets the emulator size it for
- * the game, then resizes it to WINDOW_SCREEN_SHARE of the screen's height
- * (keeping its shape) and centers it in the screen's work area. The script
- * makes itself DPI-aware first: otherwise, on a scaled display, Windows hands
- * it scaled coordinates and the window lands off-center. Best effort: if no
- * window shows within ~10 s, it gives up quietly.
- */
-const CENTER_WINDOW = [
-  `Add-Type -Namespace RetroBreak -Name Win -MemberDefinition 'public struct RECT { public int Left, Top, Right, Bottom; } [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);'`,
-  `[RetroBreak.Win]::SetProcessDPIAware() | Out-Null`,
-  `Add-Type -AssemblyName System.Windows.Forms`,
-  `for ($i = 0; $i -lt 40 -and $p.MainWindowHandle -eq 0; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh() }`,
-  `if ($p.MainWindowHandle -ne 0) { Start-Sleep -Milliseconds 700; $h = $p.MainWindowHandle; $r = New-Object RetroBreak.Win+RECT; [RetroBreak.Win]::GetWindowRect($h, [ref]$r) | Out-Null; $a = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea; $t = [int]($a.Height * ${WINDOW_SCREEN_SHARE}); $w = [int]($t * ($r.Right - $r.Left) / [Math]::Max(1, $r.Bottom - $r.Top)); if ($w -gt $a.Width) { $t = [int]($t * $a.Width / $w); $w = $a.Width }; [RetroBreak.Win]::SetWindowPos($h, [IntPtr]::Zero, [int]($a.Left + ($a.Width - $w) / 2), [int]($a.Top + ($a.Height - $t) / 2), $w, $t, 0x14) | Out-Null }`,
-].join('; ')
-const EMULATOR_EXES = Object.values(EMULATORS).map(e => e.exe.toLowerCase())
+/** The emulators the plugin starts, by process name. */
+const EMULATOR_EXES = ['snes9x-x64.exe', 'mgba.exe']
 
-// --- small helpers ---------------------------------------------------------
+// Module state; a hot reload starts it over.
+const state: {
+  pending: { cancel: () => void } | undefined
+  roms: Rom[] | undefined
+  hasWarnedNoFolder: boolean
+  isLaunching: boolean
+} = { pending: undefined, roms: undefined, hasWarnedNoFolder: false, isLaunching: false }
 
-/** A PowerShell single-quoted literal. */
-const psq = (s: string) => `'${s.replaceAll("'", "''")}'`
+const join = (dir: string, name: string) => `${dir.replace(/[\\/]+$/, '')}\\${name}`
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')) + 1)
 
-/** UTF-16LE base64, the form `powershell -EncodedCommand` takes. */
-function encodeCommand(script: string): string {
-  const bytes: number[] = []
-  for (let i = 0; i < script.length; i++) {
-    const c = script.charCodeAt(i)
-    bytes.push(c & 0xff, c >> 8)
-  }
-  let out = ''
-  for (let i = 0; i < bytes.length; i += 3) {
-    const a = bytes[i]!, b = bytes[i + 1], c = bytes[i + 2]
-    out += B64[a >> 2]
-    out += B64[((a & 3) << 4) | ((b ?? 0) >> 4)]
-    out += b === undefined ? '=' : B64[((b & 15) << 2) | ((c ?? 0) >> 6)]
-    out += c === undefined ? '=' : B64[c & 63]
-  }
-  return out
-}
-
-function powershell($: $, script: string, timeoutMs = 30_000) {
+/** Runs one of the plugin's own scripts in scripts/ with the given arguments. */
+async function runScript($: Engine, script: string, args: string[], timeoutMs: number) {
+  const file = `${$.plugin.root}\\scripts\\${script}`
   return $.process.run(
-    [
-      'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-EncodedCommand', encodeCommand(`$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${script}`),
-    ],
+    ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args],
     { timeoutMs },
   )
 }
 
-const join = (...parts: string[]) => parts.map((p, i) => (i === 0 ? p.replace(/[\\/]+$/, '') : p.replace(/^[\\/]+|[\\/]+$/g, ''))).join('\\')
-
-const dirOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')))
-
-const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')) + 1)
-
-// --- state (module-level; a hot reload starts it over) ------------------
-
-type Config = { folders: string[]; delayMs: number }
-
-const state: {
-  pending: { cancel: () => void } | undefined
-  romCache: { path: string; system: System }[] | undefined
-  hasWarnedNoFolder: boolean
-  isLaunching: boolean
-} = { pending: undefined, romCache: undefined, hasWarnedNoFolder: false, isLaunching: false }
-
-// --- work ------------------------------------------------------------------
-
-async function findRoms($: $, config: Config) {
-  if (state.romCache) return state.romCache
-  const found: { path: string; system: System }[] = []
-  const pending = config.folders.map(folder => ({ dir: folder, depth: 0 }))
-  while (pending.length > 0) {
-    const { dir, depth } = pending.pop()!
-    const entries = await $.fs.list(dir).catch(() => [])
+async function findRoms($: Engine, config: Config) {
+  if (state.roms) return state.roms
+  const found: Rom[] = []
+  const todo = config.folders.map(dir => ({ dir, depth: 0 }))
+  while (todo.length > 0) {
+    const next = todo.pop()
+    if (!next) break
+    const entries = await $.fs.list(next.dir).catch(() => [])
     for (const entry of entries) {
-      const path = join(dir, entry.name)
-      if (entry.kind === 'dir' && depth < MAX_DEPTH) pending.push({ dir: path, depth: depth + 1 })
-      else if (entry.kind === 'file') {
-        const system = SYSTEM_BY_EXT[entry.name.split('.').pop()?.toLowerCase() ?? '']
-        if (system) found.push({ path, system })
-      }
+      const path = join(next.dir, entry.name)
+      if (entry.kind === 'dir' && next.depth < MAX_DEPTH) todo.push({ dir: path, depth: next.depth + 1 })
+      if (entry.kind !== 'file') continue
+      const system = SYSTEM_BY_EXT[entry.name.split('.').pop()?.toLowerCase() ?? '']
+      if (system) found.push({ path, system })
     }
   }
-  state.romCache = found
+  state.roms = found
   return found
 }
 
-async function isEmulatorRunning($: $) {
-  const { stdout } = await $.process.run(['tasklist.exe', '/FO', 'CSV', '/NH'])
-  return stdout
+async function isEmulatorRunning($: Engine) {
+  const result = await $.process.run(['tasklist.exe', '/FO', 'CSV', '/NH'])
+  return result.stdout
     .toLowerCase()
     .split('\n')
     .some(line => EMULATOR_EXES.includes(line.split(',')[0]?.replaceAll('"', '').trim() ?? ''))
 }
 
-/** The emulator's exe path, downloading and unpacking it the first time. */
-async function ensureEmulator($: $, system: System) {
-  const emu = EMULATORS[system]
-  const localAppData = (await $.env.get('LOCALAPPDATA')) ?? ''
-  const dir = join(localAppData, 'retro-break', 'emulators', system)
-  const find = `Get-ChildItem -LiteralPath ${psq(dir)} -Recurse -Filter ${psq(emu.exe)} | Select-Object -First 1 -ExpandProperty FullName`
-
-  const existing = (await $.fs.exists(dir)) ? (await powershell($, find)).stdout.trim() : ''
-  if (existing) return existing
-
-  $.ui.status(`retro-break: downloading ${emu.name} (one time)…`)
-  try {
-    const archive = join(dir, 'download.tmp')
-    const result = await powershell(
-      $,
-      [
-        `New-Item -ItemType Directory -Force -Path ${psq(dir)} | Out-Null`,
-        `Invoke-WebRequest -UseBasicParsing -Uri ${psq(emu.url)} -OutFile ${psq(archive)}`,
-        `& (Join-Path $env:SystemRoot 'System32\\tar.exe') -xf ${psq(archive)} -C ${psq(dir)}`,
-        `if ($LASTEXITCODE) { throw 'could not unpack the download' }`,
-        `Remove-Item -LiteralPath ${psq(archive)}`,
-        find,
-      ].join('; '),
-      600_000,
-    )
-    const exe = result.stdout.trim().split('\n').pop()?.trim() ?? ''
-    if (result.exitCode !== 0 || !exe) throw new Error(result.stderr.trim().slice(0, 200) || 'download failed')
-    if (emu.portableFile) await $.fs.write(join(dirOf(exe), emu.portableFile), '')
-    return exe
-  } finally {
-    $.ui.status(undefined)
-  }
-}
-
-async function launchRandomGame($: $, config: Config) {
+async function launchRandomGame($: Engine, config: Config) {
   if (state.isLaunching) return
   state.isLaunching = true
   try {
@@ -179,46 +82,40 @@ async function launchRandomGame($: $, config: Config) {
       }
       return
     }
-    if (await isEmulatorRunning($)) return // a game is already open: keep playing that one
+    const isRunning = await isEmulatorRunning($)
+    if (isRunning) return // a game is already open: keep playing that one
 
     const roms = await findRoms($, config)
-    if (roms.length === 0) {
+    const rom = roms[Math.floor(Math.random() * roms.length)]
+    if (!rom) {
       $.ui.toast(`retro-break: no .sfc, .smc, .gba, .gb or .gbc files found in ${config.folders.join('; ')}`, { timeoutMs: 8000 })
       return
     }
-    const rom = roms[Math.floor(Math.random() * roms.length)]!
-    const exe = await ensureEmulator($, rom.system)
 
-    await powershell($, [
-      `$p = Start-Process -PassThru -FilePath ${psq(exe)} -WorkingDirectory ${psq(dirOf(exe))} -ArgumentList ('"' + ${psq(rom.path)} + '"')`,
-      CENTER_WINDOW,
-    ].join('; '))
+    $.ui.status('retro-break: getting the emulator ready…')
+    const installed = await runScript($, 'install-emulator.ps1', ['-System', rom.system], 600_000)
+    $.ui.status(undefined)
+    const exe = installed.stdout.trim().split('\n').pop()?.trim() ?? ''
+    if (installed.exitCode !== 0 || !exe) throw new Error(installed.stderr.trim().slice(0, 200) || 'emulator setup failed')
+
+    await runScript($, 'launch-game.ps1', ['-Exe', exe, '-Rom', rom.path, '-ScreenShare', SCREEN_SHARE], 30_000)
     $.ui.toast(`retro-break: Claude is still working. Enjoy ${baseName(rom.path).replace(/\.[^.]+$/, '')}!`)
   } catch (error) {
+    $.ui.status(undefined)
     $.ui.toast(`retro-break: could not start a game (${String(error).slice(0, 160)})`, { timeoutMs: 8000 })
   } finally {
     state.isLaunching = false
   }
 }
 
-async function notifyDone($: $, seconds: number) {
+async function notifyDone($: Engine, seconds: number) {
   const title = 'Claude is done'
-  const body = `Finished after ${seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`}. Come back when you reach a save point.`
-  // A native Windows toast, shown over the game; PowerShell is the sender app.
-  const toast = [
-    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
-    `$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)`,
-    `$text = $xml.GetElementsByTagName('text')`,
-    `$text.Item(0).AppendChild($xml.CreateTextNode(${psq(title)})) | Out-Null`,
-    `$text.Item(1).AppendChild($xml.CreateTextNode(${psq(body)})) | Out-Null`,
-    `$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'`,
-    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))`,
-  ].join('; ')
-  const shown = await powershell($, toast).catch(() => undefined)
-  if (shown?.exitCode !== 0) await $.ui.notify(body, { title }).catch(() => undefined)
+  const took = seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`
+  const body = `Finished after ${took}. Come back when you reach a save point.`
+  const shown = await runScript($, 'notify.ps1', ['-Title', title, '-Body', body], 30_000).catch(() => undefined)
+  if (shown && shown.exitCode === 0) return
+  await $.ui.notify(body, { title }).catch(() => undefined)
 }
-
-// --- hooks -----------------------------------------------------------------
 
 export const register: Register = (on, options) => {
   const config: Config = {

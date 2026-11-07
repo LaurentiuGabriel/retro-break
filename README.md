@@ -55,11 +55,15 @@ Everything the plugin does outside Claude Code, listed in full:
 | --- | --- | --- |
 | Lists your ROM folder | First game of a session | Reads file names only, up to 4 subfolders deep. Never reads, copies or uploads ROM contents. |
 | `tasklist.exe` | Before opening a game | Checks whether `snes9x-x64.exe` or `mGBA.exe` is already running. |
-| Downloads an emulator | The first time a game for that system is picked | `powershell.exe` downloads one pinned file over HTTPS from the emulator's official GitHub release ([Snes9x 1.63](https://github.com/snes9xgit/snes9x/releases/download/1.63/snes9x-1.63-win32-x64.zip), [mGBA 0.10.5](https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64.7z)) and unpacks it with Windows' built-in `tar.exe` into `%LOCALAPPDATA%\retro-break\emulators`. For mGBA it also writes an empty `portable.ini` there, so its settings stay in that folder. |
-| Opens the game | When the countdown ends | `powershell.exe` runs `Start-Process` on the emulator with the chosen ROM, then resizes and centers its window through `user32.dll`. |
-| Windows notification | When a long task finishes | `powershell.exe` shows a toast through the Windows notification API. If that fails, Claude Code's own notification is used. |
+| [`scripts/install-emulator.ps1`](scripts/install-emulator.ps1) | Before opening a game | If the emulator for that system isn't there yet, downloads one pinned file over HTTPS from its official GitHub release ([Snes9x 1.63](https://github.com/snes9xgit/snes9x/releases/download/1.63/snes9x-1.63-win32-x64.zip), [mGBA 0.10.5](https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64.7z)), unpacks it with Windows' built-in `tar.exe` into `%LOCALAPPDATA%\retro-break\emulators`, and prints the emulator's path. For mGBA it also creates an empty `portable.ini` there, so mGBA keeps its settings and saves in that folder. |
+| [`scripts/launch-game.ps1`](scripts/launch-game.ps1) | When the countdown ends | Starts the emulator with the chosen ROM, then resizes and centers its window through `user32.dll`. |
+| [`scripts/notify.ps1`](scripts/notify.ps1) | When a long task finishes | Shows a Windows toast through the Windows notification API. If that fails, Claude Code's own notification (`$.ui.notify`) is used instead. |
 
-It sends nothing anywhere: no telemetry, no analytics. The only network traffic is the one-time emulator download from GitHub, and it never sends your prompts, code or files.
+Each script runs as `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <plugin>\scripts\<script>.ps1` with plain arguments: the system name, the emulator and ROM paths, the window size, and the notification text.
+
+**Data:** the plugin reads the file names in your ROM folder and nothing else of yours. It never reads your prompts, Claude's replies, your code or your files, and it sends nothing anywhere: no telemetry, no analytics. The only network traffic is the one-time emulator download from GitHub, which sends nothing but the download request.
+
+**Files it writes:** only inside `%LOCALAPPDATA%\retro-break\emulators` (the emulators, `portable.ini` for mGBA, and the emulators' own saves and settings).
 
 ## Requirements
 

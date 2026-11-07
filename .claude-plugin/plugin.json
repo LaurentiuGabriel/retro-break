@@ -1,8 +1,13 @@
 {
   "name": "retro-break",
   "version": "0.3.0",
-  "description": "While Claude works on a long task, opens a random SNES or GBA game from your ROM folder. Emulators download themselves; you only bring the ROMs.",
-  "author": { "name": "Laurentiu Raducu" },
+  "description": "While Claude works on a long task, opens a random SNES or GBA game from your own ROM folder, then notifies you when Claude is done. Windows only. Emulators download themselves; you bring your own ROMs.",
+  "author": { "name": "Laurentiu Raducu", "url": "https://github.com/LaurentiuGabriel" },
+  "homepage": "https://github.com/LaurentiuGabriel/retro-break",
+  "repository": "https://github.com/LaurentiuGabriel/retro-break",
+  "documentationUrl": "https://github.com/LaurentiuGabriel/retro-break#readme",
+  "supportUrl": "https://github.com/LaurentiuGabriel/retro-break/issues",
+  "privacyPolicyUrl": "https://github.com/LaurentiuGabriel/retro-break/blob/main/PRIVACY.md",
   "license": "MIT",
   "keywords": ["snes", "gba", "emulator", "games", "fun"],
   "userConfig": {

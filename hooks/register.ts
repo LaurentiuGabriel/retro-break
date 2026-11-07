@@ -31,6 +31,25 @@ const SYSTEM_BY_EXT: Record<string, System> = {
 }
 
 const MAX_DEPTH = 4
+
+/** How much of the screen's height the game window takes. */
+const WINDOW_SCREEN_SHARE = 0.6
+
+/**
+ * PowerShell that waits for `$p`'s main window, lets the emulator size it for
+ * the game, then resizes it to WINDOW_SCREEN_SHARE of the screen's height
+ * (keeping its shape) and centers it in the screen's work area. The script
+ * makes itself DPI-aware first: otherwise, on a scaled display, Windows hands
+ * it scaled coordinates and the window lands off-center. Best effort: if no
+ * window shows within ~10 s, it gives up quietly.
+ */
+const CENTER_WINDOW = [
+  `Add-Type -Namespace RetroBreak -Name Win -MemberDefinition 'public struct RECT { public int Left, Top, Right, Bottom; } [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);'`,
+  `[RetroBreak.Win]::SetProcessDPIAware() | Out-Null`,
+  `Add-Type -AssemblyName System.Windows.Forms`,
+  `for ($i = 0; $i -lt 40 -and $p.MainWindowHandle -eq 0; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh() }`,
+  `if ($p.MainWindowHandle -ne 0) { Start-Sleep -Milliseconds 700; $h = $p.MainWindowHandle; $r = New-Object RetroBreak.Win+RECT; [RetroBreak.Win]::GetWindowRect($h, [ref]$r) | Out-Null; $a = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea; $t = [int]($a.Height * ${WINDOW_SCREEN_SHARE}); $w = [int]($t * ($r.Right - $r.Left) / [Math]::Max(1, $r.Bottom - $r.Top)); if ($w -gt $a.Width) { $t = [int]($t * $a.Width / $w); $w = $a.Width }; [RetroBreak.Win]::SetWindowPos($h, [IntPtr]::Zero, [int]($a.Left + ($a.Width - $w) / 2), [int]($a.Top + ($a.Height - $t) / 2), $w, $t, 0x14) | Out-Null }`,
+].join('; ')
 const EMULATOR_EXES = Object.values(EMULATORS).map(e => e.exe.toLowerCase())
 
 // --- small helpers ---------------------------------------------------------
@@ -170,10 +189,10 @@ async function launchRandomGame($: $, config: Config) {
     const rom = roms[Math.floor(Math.random() * roms.length)]!
     const exe = await ensureEmulator($, rom.system)
 
-    await powershell(
-      $,
-      `Start-Process -FilePath ${psq(exe)} -WorkingDirectory ${psq(dirOf(exe))} -ArgumentList ('"' + ${psq(rom.path)} + '"')`,
-    )
+    await powershell($, [
+      `$p = Start-Process -PassThru -FilePath ${psq(exe)} -WorkingDirectory ${psq(dirOf(exe))} -ArgumentList ('"' + ${psq(rom.path)} + '"')`,
+      CENTER_WINDOW,
+    ].join('; '))
     $.ui.toast(`retro-break: Claude is still working. Enjoy ${baseName(rom.path).replace(/\.[^.]+$/, '')}!`)
   } catch (error) {
     $.ui.toast(`retro-break: could not start a game (${String(error).slice(0, 160)})`, { timeoutMs: 8000 })

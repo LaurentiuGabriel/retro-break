@@ -4,6 +4,8 @@ A [Claude Code](https://claude.com/claude-code) plugin that gives you something 
 
 When Claude has been working on a task for a minute, retro-break opens a **random SNES or GBA game** from your ROM folder. When Claude finishes, you get a **Windows notification**, so you can play until you reach a save point and then go back to work.
 
+<p align="center"><img src="docs/screenshot.png" alt="Snes9x opened by retro-break in the middle of the screen while Claude Code works" width="560"></p>
+
 You only bring the ROMs. The emulators download themselves the first time they're needed:
 
 | System | Emulator | File types |
@@ -39,7 +41,7 @@ The install asks for two settings. You can change them later in `/config`:
 ## How it works
 
 - **You send a prompt:** a countdown starts.
-- **Claude is still working when the countdown ends:** a random ROM opens in the right emulator. If a game is already open, it is left alone and no new one starts.
+- **Claude is still working when the countdown ends:** a random ROM opens in the right emulator, in a window 60% of the screen's height, centered. If a game is already open, it is left alone and no new one starts.
 - **Claude finishes:** if the task ran past the countdown, a Windows notification says Claude is done. The game keeps running, so close it when you're ready.
 - **Quick answers** and tasks you interrupt don't open a game or send a notification.
 

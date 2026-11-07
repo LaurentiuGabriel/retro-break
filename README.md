@@ -47,6 +47,20 @@ The install asks for two settings. You can change them later in `/config`:
 
 The emulators go into `%LOCALAPPDATA%\retro-break\emulators`. Save files and emulator settings are kept there too, so they survive plugin updates. To start fresh, delete that folder.
 
+## What it runs, fetches and writes
+
+Everything the plugin does outside Claude Code, listed in full:
+
+| What | When | Details |
+| --- | --- | --- |
+| Lists your ROM folder | First game of a session | Reads file names only, up to 4 subfolders deep. Never reads, copies or uploads ROM contents. |
+| `tasklist.exe` | Before opening a game | Checks whether `snes9x-x64.exe` or `mGBA.exe` is already running. |
+| Downloads an emulator | The first time a game for that system is picked | `powershell.exe` downloads one pinned file over HTTPS from the emulator's official GitHub release ([Snes9x 1.63](https://github.com/snes9xgit/snes9x/releases/download/1.63/snes9x-1.63-win32-x64.zip), [mGBA 0.10.5](https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64.7z)) and unpacks it with Windows' built-in `tar.exe` into `%LOCALAPPDATA%\retro-break\emulators`. For mGBA it also writes an empty `portable.ini` there, so its settings stay in that folder. |
+| Opens the game | When the countdown ends | `powershell.exe` runs `Start-Process` on the emulator with the chosen ROM, then resizes and centers its window through `user32.dll`. |
+| Windows notification | When a long task finishes | `powershell.exe` shows a toast through the Windows notification API. If that fails, Claude Code's own notification is used. |
+
+It sends nothing anywhere: no telemetry, no analytics. The only network traffic is the one-time emulator download from GitHub, and it never sends your prompts, code or files.
+
 ## Requirements
 
 - Windows 10 or 11 (it uses PowerShell, `tar.exe` and Windows notifications).

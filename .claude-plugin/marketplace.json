@@ -1,0 +1,12 @@
+{
+  "name": "retro-break",
+  "owner": { "name": "Laurentiu Raducu" },
+  "metadata": { "description": "retro-break: play a random SNES or GBA game while Claude Code works." },
+  "plugins": [
+    {
+      "name": "retro-break",
+      "source": "./",
+      "description": "Opens a random SNES or GBA game from your ROM folder while Claude works on a long task, and notifies you when it's done."
+    }
+  ]
+}

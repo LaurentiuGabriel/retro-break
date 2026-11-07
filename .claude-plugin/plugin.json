@@ -1,6 +1,6 @@
 {
   "name": "retro-break",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "While Claude works on a long task, opens a random SNES or GBA game from your ROM folder. Emulators download themselves; you only bring the ROMs.",
   "author": { "name": "Laurentiu Raducu" },
   "license": "MIT",
